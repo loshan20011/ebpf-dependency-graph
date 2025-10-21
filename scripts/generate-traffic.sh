@@ -41,7 +41,7 @@ make_request() {
 echo -e "${BLUE}🔍 Checking if services are running...${NC}"
 
 services_running=0
-for port in 8000 8001 8002 8003 8007; do
+for port in 8000 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010; do
     if curl -s http://localhost:$port/health >/dev/null 2>&1; then
         services_running=$((services_running + 1))
         echo -e "${GREEN}   ✅ Port $port: Running${NC}"
@@ -69,7 +69,13 @@ make_request "http://localhost:8000/health" "Gateway health check"
 make_request "http://localhost:8001/health" "User service health check"
 make_request "http://localhost:8002/health" "Order service health check"
 make_request "http://localhost:8003/health" "Notification service health check"
+make_request "http://localhost:8004/health" "Product service health check"
+make_request "http://localhost:8005/health" "Inventory service health check"
+make_request "http://localhost:8006/health" "Shipping service health check"
 make_request "http://localhost:8007/health" "Payment service health check"
+make_request "http://localhost:8008/health" "Auth service health check"
+make_request "http://localhost:8009/health" "Catalog service health check"
+make_request "http://localhost:8010/health" "Cache service health check"
 
 # Generate inter-service traffic
 echo -e "${BLUE}🔄 Generating inter-service traffic...${NC}"
@@ -84,19 +90,45 @@ for i in {1..3}; do
     # Gateway -> Order Service -> User Service + Payment Service
     make_request "http://localhost:8000/api/orders" "Gateway calling Order Service (triggers user + payment)"
     sleep 1
+
+    # Gateway -> Product Service -> Inventory + Shipping (+ Cache)
+    make_request "http://localhost:8000/api/products" "Gateway calling Product Service (triggers inventory + shipping + cache)"
+    sleep 1
+
+    # Gateway -> Catalog Service -> Product + User
+    make_request "http://localhost:8000/api/catalog" "Gateway calling Catalog Service (aggregates product + user)"
+    sleep 1
     
     # Direct service calls to create more dependencies
     make_request "http://localhost:8001/users" "Direct User Service call"
-    sleep 0.5
+    sleep 0.3
     
     make_request "http://localhost:8002/orders" "Direct Order Service call"
-    sleep 0.5
+    sleep 0.3
     
     make_request "http://localhost:8003/notify" "Direct Notification Service call"
-    sleep 0.5
+    sleep 0.3
+
+    make_request "http://localhost:8004/products" "Direct Product Service call"
+    sleep 0.3
+
+    make_request "http://localhost:8005/inventory" "Direct Inventory Service call"
+    sleep 0.3
+
+    make_request "http://localhost:8006/shipping" "Direct Shipping Service call"
+    sleep 0.3
     
     make_request "http://localhost:8007/payment" "Direct Payment Service call"
-    sleep 1
+    sleep 0.3
+
+    make_request "http://localhost:8008/login" "Direct Auth Service call"
+    sleep 0.3
+
+    make_request "http://localhost:8009/catalog" "Direct Catalog Service call"
+    sleep 0.3
+
+    make_request "http://localhost:8010/cache/ping" "Direct Cache Service call"
+    sleep 0.5
     
     echo -e "${BLUE}   Completed round $i${NC}"
     echo ""
@@ -113,11 +145,17 @@ generate_background_traffic() {
     
     while [ $(date +%s) -lt $end_time ]; do
         # Random endpoint selection
-        case $((RANDOM % 4)) in
+        case $((RANDOM % 10)) in
             0) curl -s http://localhost:8000/api/users >/dev/null 2>&1 ;;
             1) curl -s http://localhost:8000/api/orders >/dev/null 2>&1 ;;
-            2) curl -s http://localhost:8001/users >/dev/null 2>&1 ;;
-            3) curl -s http://localhost:8002/orders >/dev/null 2>&1 ;;
+            2) curl -s http://localhost:8000/api/products >/dev/null 2>&1 ;;
+            3) curl -s http://localhost:8000/api/catalog >/dev/null 2>&1 ;;
+            4) curl -s http://localhost:8001/users >/dev/null 2>&1 ;;
+            5) curl -s http://localhost:8002/orders >/dev/null 2>&1 ;;
+            6) curl -s http://localhost:8004/products >/dev/null 2>&1 ;;
+            7) curl -s http://localhost:8005/inventory >/dev/null 2>&1 ;;
+            8) curl -s http://localhost:8006/shipping >/dev/null 2>&1 ;;
+            9) curl -s http://localhost:8008/login >/dev/null 2>&1 ;;
         esac
         
         # Random delay between requests (0.5-2 seconds)

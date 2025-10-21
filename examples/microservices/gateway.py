@@ -17,7 +17,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
             
         if self.path.startswith('/api/users'):
-            # Forward to user service
+            # Auth then forward to user service
+            try:
+                requests.get('http://localhost:8008/login', timeout=2)
+            except:
+                pass
             try:
                 resp = requests.get('http://localhost:8001/users', timeout=5)
                 self.send_response(resp.status_code)
@@ -31,9 +35,49 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
             
         if self.path.startswith('/api/orders'):
-            # Forward to order service
+            # Auth then forward to order service
+            try:
+                requests.get('http://localhost:8008/login', timeout=2)
+            except:
+                pass
             try:
                 resp = requests.get('http://localhost:8002/orders', timeout=5)
+                self.send_response(resp.status_code)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(resp.content)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"Error: {e}".encode())
+            return
+        
+        if self.path.startswith('/api/products'):
+            # Auth then forward to product service
+            try:
+                requests.get('http://localhost:8008/login', timeout=2)
+            except:
+                pass
+            try:
+                resp = requests.get('http://localhost:8004/products', timeout=5)
+                self.send_response(resp.status_code)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(resp.content)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"Error: {e}".encode())
+            return
+        
+        if self.path.startswith('/api/catalog'):
+            # Auth then forward to catalog service
+            try:
+                requests.get('http://localhost:8008/login', timeout=2)
+            except:
+                pass
+            try:
+                resp = requests.get('http://localhost:8009/catalog', timeout=5)
                 self.send_response(resp.status_code)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()

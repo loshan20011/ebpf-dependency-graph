@@ -44,7 +44,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
             
         if self.path.startswith('/api/users'):
-            # Forward to user service
+            # Auth then forward to user service
+            try:
+                requests.get('http://localhost:8008/login', timeout=2)
+            except:
+                pass
             try:
                 resp = requests.get('http://localhost:8001/users', timeout=5)
                 self.send_response(resp.status_code)
@@ -58,9 +62,49 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
             
         if self.path.startswith('/api/orders'):
-            # Forward to order service
+            # Auth then forward to order service
+            try:
+                requests.get('http://localhost:8008/login', timeout=2)
+            except:
+                pass
             try:
                 resp = requests.get('http://localhost:8002/orders', timeout=5)
+                self.send_response(resp.status_code)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(resp.content)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"Error: {e}".encode())
+            return
+        
+        if self.path.startswith('/api/products'):
+            # Auth then forward to product service
+            try:
+                requests.get('http://localhost:8008/login', timeout=2)
+            except:
+                pass
+            try:
+                resp = requests.get('http://localhost:8004/products', timeout=5)
+                self.send_response(resp.status_code)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(resp.content)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"Error: {e}".encode())
+            return
+        
+        if self.path.startswith('/api/catalog'):
+            # Auth then forward to catalog service
+            try:
+                requests.get('http://localhost:8008/login', timeout=2)
+            except:
+                pass
+            try:
+                resp = requests.get('http://localhost:8009/catalog', timeout=5)
                 self.send_response(resp.status_code)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
@@ -241,6 +285,219 @@ if __name__ == '__main__':
     server.serve_forever()
 EOF
 
+# Product Service (Port 8004)
+cat > product-service.py << 'EOF'
+#!/usr/bin/env python3
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import requests
+
+class ProductHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        print(f"Product service received: {self.path}")
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"service": "product-service", "status": "healthy"}).encode())
+            return
+        if self.path == '/products':
+            # Call inventory and shipping; use cache
+            try:
+                requests.get('http://localhost:8010/cache/ping', timeout=2)
+                requests.get('http://localhost:8005/inventory', timeout=2)
+                requests.get('http://localhost:8006/shipping', timeout=2)
+            except:
+                pass
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            products = [
+                {"id": 101, "name": "Widget", "price": 19.99},
+                {"id": 102, "name": "Gadget", "price": 29.99}
+            ]
+            self.wfile.write(json.dumps(products).encode())
+            return
+        self.send_response(404)
+        self.end_headers()
+
+if __name__ == '__main__':
+    server = HTTPServer(('0.0.0.0', 8004), ProductHandler)
+    print("Product service starting on port 8004...")
+    server.serve_forever()
+EOF
+
+# Inventory Service (Port 8005)
+cat > inventory-service.py << 'EOF'
+#!/usr/bin/env python3
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import requests
+
+class InventoryHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        print(f"Inventory service received: {self.path}")
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"service": "inventory-service", "status": "healthy"}).encode())
+            return
+        if self.path == '/inventory':
+            # Use cache
+            try:
+                requests.get('http://localhost:8010/cache/ping', timeout=2)
+            except:
+                pass
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            stock = {"101": 42, "102": 17}
+            self.wfile.write(json.dumps(stock).encode())
+            return
+        self.send_response(404)
+        self.end_headers()
+
+if __name__ == '__main__':
+    server = HTTPServer(('0.0.0.0', 8005), InventoryHandler)
+    print("Inventory service starting on port 8005...")
+    server.serve_forever()
+EOF
+
+# Shipping Service (Port 8006)
+cat > shipping-service.py << 'EOF'
+#!/usr/bin/env python3
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import requests
+
+class ShippingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        print(f"Shipping service received: {self.path}")
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"service": "shipping-service", "status": "healthy"}).encode())
+            return
+        if self.path == '/shipping':
+            # Notify on shipping quote
+            try:
+                requests.get('http://localhost:8003/notify', timeout=2)
+            except:
+                pass
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            quote = {"carrier": "FastShip", "cost": 4.99}
+            self.wfile.write(json.dumps(quote).encode())
+            return
+        self.send_response(404)
+        self.end_headers()
+
+if __name__ == '__main__':
+    server = HTTPServer(('0.0.0.0', 8006), ShippingHandler)
+    print("Shipping service starting on port 8006...")
+    server.serve_forever()
+EOF
+
+# Auth Service (Port 8008)
+cat > auth-service.py << 'EOF'
+#!/usr/bin/env python3
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class AuthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        print(f"Auth service received: {self.path}")
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"service": "auth-service", "status": "healthy"}).encode())
+            return
+        if self.path == '/login':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"token": "dummy-token"}).encode())
+            return
+        self.send_response(404)
+        self.end_headers()
+
+if __name__ == '__main__':
+    server = HTTPServer(('0.0.0.0', 8008), AuthHandler)
+    print("Auth service starting on port 8008...")
+    server.serve_forever()
+EOF
+
+# Catalog Service (Port 8009)
+cat > catalog-service.py << 'EOF'
+#!/usr/bin/env python3
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import requests
+
+class CatalogHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        print(f"Catalog service received: {self.path}")
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"service": "catalog-service", "status": "healthy"}).encode())
+            return
+        if self.path == '/catalog':
+            # Aggregate products and users
+            try:
+                requests.get('http://localhost:8004/products', timeout=2)
+                requests.get('http://localhost:8001/users', timeout=2)
+            except:
+                pass
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True}).encode())
+            return
+        self.send_response(404)
+        self.end_headers()
+
+if __name__ == '__main__':
+    server = HTTPServer(('0.0.0.0', 8009), CatalogHandler)
+    print("Catalog service starting on port 8009...")
+    server.serve_forever()
+EOF
+
+# Cache Service (Port 8010)
+cat > cache-service.py << 'EOF'
+#!/usr/bin/env python3
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class CacheHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        print(f"Cache service received: {self.path}")
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"service": "cache-service", "status": "healthy"}).encode())
+            return
+        if self.path == '/cache/ping':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"pong": True}).encode())
+            return
+        self.send_response(404)
+        self.end_headers()
+
+if __name__ == '__main__':
+    server = HTTPServer(('0.0.0.0', 8010), CacheHandler)
+    print("Cache service starting on port 8010...")
+    server.serve_forever()
+EOF
+
 # Make scripts executable
 chmod +x *.py
 
@@ -276,34 +533,64 @@ echo -e "${BLUE}   Starting Notification Service (port 8003)...${NC}"
 nohup $PYTHON_CMD notification-service.py > ../../logs/notification-service.log 2>&1 &
 sleep 1
 
+echo -e "${BLUE}   Starting Product Service (port 8004)...${NC}"
+nohup $PYTHON_CMD product-service.py > ../../logs/product-service.log 2>&1 &
+sleep 1
+
+echo -e "${BLUE}   Starting Inventory Service (port 8005)...${NC}"
+nohup $PYTHON_CMD inventory-service.py > ../../logs/inventory-service.log 2>&1 &
+sleep 1
+
+echo -e "${BLUE}   Starting Shipping Service (port 8006)...${NC}"
+nohup $PYTHON_CMD shipping-service.py > ../../logs/shipping-service.log 2>&1 &
+sleep 1
+
 echo -e "${BLUE}   Starting Payment Service (port 8007)...${NC}"
 nohup $PYTHON_CMD payment-service.py > ../../logs/payment-service.log 2>&1 &
+sleep 1
+
+echo -e "${BLUE}   Starting Auth Service (port 8008)...${NC}"
+nohup $PYTHON_CMD auth-service.py > ../../logs/auth-service.log 2>&1 &
+sleep 1
+
+echo -e "${BLUE}   Starting Catalog Service (port 8009)...${NC}"
+nohup $PYTHON_CMD catalog-service.py > ../../logs/catalog-service.log 2>&1 &
+sleep 1
+
+echo -e "${BLUE}   Starting Cache Service (port 8010)...${NC}"
+nohup $PYTHON_CMD cache-service.py > ../../logs/cache-service.log 2>&1 &
 sleep 2
 
 echo -e "${GREEN}✅ All microservices started!${NC}"
 echo ""
 
-# Test services
-echo -e "${BLUE}🧪 Testing services...${NC}"
-for port in 8000 8001 8002 8003 8007; do
-    if curl -s http://localhost:$port/health >/dev/null; then
-        echo -e "${GREEN}   ✅ Port $port: Service responding${NC}"
-    else
-        echo -e "${YELLOW}   ⚠️  Port $port: Service not responding yet${NC}"
-    fi
-done
+# # Test services
+# echo -e "${BLUE}🧪 Testing services...${NC}"
+# for port in 8000 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010; do
+#     if curl -s http://localhost:$port/health >/dev/null; then
+#         echo -e "${GREEN}   ✅ Port $port: Service responding${NC}"
+#     else
+#         echo -e "${YELLOW}   ⚠️  Port $port: Service not responding yet${NC}"
+#     fi
+# done
 
-echo ""
-echo -e "${BLUE}📊 Service endpoints:${NC}"
-echo "   • Gateway:      http://localhost:8000"
-echo "   • User Service: http://localhost:8001" 
-echo "   • Order Service: http://localhost:8002"
-echo "   • Notification: http://localhost:8003"
-echo "   • Payment:      http://localhost:8007"
+# echo ""
+# echo -e "${BLUE}📊 Service endpoints:${NC}"
+# echo "   • Gateway:      http://localhost:8000"
+# echo "   • User Service: http://localhost:8001" 
+# echo "   • Order Service: http://localhost:8002"
+# echo "   • Notification: http://localhost:8003"
+# echo "   • Product:      http://localhost:8004"
+# echo "   • Inventory:    http://localhost:8005"
+# echo "   • Shipping:     http://localhost:8006"
+# echo "   • Payment:      http://localhost:8007"
+# echo "   • Auth:         http://localhost:8008"
+# echo "   • Catalog:      http://localhost:8009"
+# echo "   • Cache:        http://localhost:8010"
 
-echo ""
-echo -e "${BLUE}📋 Test commands:${NC}"
-echo "   • Health: curl http://localhost:8000/health"
-echo "   • Users:  curl http://localhost:8000/api/users"
-echo "   • Orders: curl http://localhost:8000/api/orders"
-echo "   • Logs:   tail -f ../../logs/*.log"
+# echo ""
+# echo -e "${BLUE}📋 Test commands:${NC}"
+# echo "   • Health: curl http://localhost:8000/health"
+# echo "   • Users:  curl http://localhost:8000/api/users"
+# echo "   • Orders: curl http://localhost:8000/api/orders"
+# echo "   • Logs:   tail -f ../../logs/*.log"

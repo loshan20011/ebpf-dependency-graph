@@ -52,42 +52,54 @@ func (sr *ServiceRegistry) GetServiceName(ip string, port uint32) string {
 
 // detectServiceByPort tries to identify services by their well-known ports
 func (sr *ServiceRegistry) detectServiceByPort(port uint32) string {
-	switch port {
-	case 8000:
-		return "gateway"
-	case 8001:
-		return "user-service"
-	case 8002:
-		return "order-service"  
-	case 8003:
-		return "notification-service"
-	case 8007:
-		return "payment-service"
-	case 80:
-		return "web-server"
-	case 443:
-		return "https-server"
-	case 3306:
-		return "mysql"
-	case 5432:
-		return "postgresql"
-	case 6379:
-		return "redis"
-	case 9090:
-		return "operator"
-	default:
-		return fmt.Sprintf("service-port-%d", port)
-	}
+    switch port {
+    case 8000:
+        return "gateway"
+    case 8001:
+        return "user-service"
+    case 8002:
+        return "order-service"  
+    case 8003:
+        return "notification-service"
+    case 8004:
+        return "product-service"
+    case 8005:
+        return "inventory-service"
+    case 8006:
+        return "shipping-service"
+    case 8007:
+        return "payment-service"
+    case 8008:
+        return "auth-service"
+    case 8009:
+        return "catalog-service"
+    case 8010:
+        return "cache-service"
+    case 80:
+        return "web-server"
+    case 443:
+        return "https-server"
+    case 3306:
+        return "mysql"
+    case 5432:
+        return "postgresql"
+    case 6379:
+        return "redis"
+    case 9090:
+        return "operator"
+    default:
+        return fmt.Sprintf("service-port-%d", port)
+    }
 }
 
 // DiscoverServices automatically discovers services by probing known ports
 func (sr *ServiceRegistry) DiscoverServices() {
-	knownPorts := []uint32{8000, 8001, 8002, 8003, 8007}
-	
-	for _, port := range knownPorts {
-		go sr.probeService("127.0.0.1", port)
-		go sr.probeService("localhost", port)
-	}
+    knownPorts := []uint32{8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007, 8008, 8009, 8010}
+    
+    for _, port := range knownPorts {
+        go sr.probeService("127.0.0.1", port)
+        go sr.probeService("localhost", port)
+    }
 }
 
 // probeService probes a service to discover its identity

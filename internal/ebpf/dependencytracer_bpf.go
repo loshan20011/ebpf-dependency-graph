@@ -17,6 +17,8 @@ type dependencyTracerCookieMeta struct {
 	Dport uint16
 	_     [2]byte
 	Daddr uint32
+	Pid   uint32
+	Comm  [16]int8
 }
 
 type dependencyTracerDependencyInfo struct {
@@ -128,6 +130,7 @@ type dependencyTracerSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type dependencyTracerProgramSpecs struct {
+	CgroupBindTracker    *ebpf.ProgramSpec `ebpf:"cgroup_bind_tracker"`
 	CgroupConnectTracker *ebpf.ProgramSpec `ebpf:"cgroup_connect_tracker"`
 	SockopsTracker       *ebpf.ProgramSpec `ebpf:"sockops_tracker"`
 	TcDependencyTracker  *ebpf.ProgramSpec `ebpf:"tc_dependency_tracker"`
@@ -205,6 +208,7 @@ type dependencyTracerVariables struct {
 //
 // It can be passed to loadDependencyTracerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type dependencyTracerPrograms struct {
+	CgroupBindTracker    *ebpf.Program `ebpf:"cgroup_bind_tracker"`
 	CgroupConnectTracker *ebpf.Program `ebpf:"cgroup_connect_tracker"`
 	SockopsTracker       *ebpf.Program `ebpf:"sockops_tracker"`
 	TcDependencyTracker  *ebpf.Program `ebpf:"tc_dependency_tracker"`
@@ -214,6 +218,7 @@ type dependencyTracerPrograms struct {
 
 func (p *dependencyTracerPrograms) Close() error {
 	return _DependencyTracerClose(
+		p.CgroupBindTracker,
 		p.CgroupConnectTracker,
 		p.SockopsTracker,
 		p.TcDependencyTracker,

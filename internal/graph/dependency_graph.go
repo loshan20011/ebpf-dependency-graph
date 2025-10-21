@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"strings"
 
 	pb "github.com/ebpf-dependency-tracker/pkg/proto"
 )
@@ -182,9 +183,25 @@ func (gm *GraphManager) ProcessFlowEvent(flowEvent *pb.FlowEvent) {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
 
-	// Create or update source service
-	sourceID := fmt.Sprintf("%s:%d", flowEvent.SourceIp, flowEvent.SourcePort)
-	sourceService := gm.getOrCreateService(sourceID, flowEvent.SourceIp, flowEvent.SourcePort, flowEvent.SrcComm)
+	// Filter out non-local/irrelevant flows (avoid noise without app instrumentation)
+	if !isAllowedPort(flowEvent.DestPort) || flowEvent.DestIp != "127.0.0.1" {
+		return
+	}
+
+	// Heuristic: map source process name to stable service port (gateway/user/order/payment/notification)
+	sourcePort := flowEvent.SourcePort
+	if p := guessPortByComm(flowEvent.SrcComm); p != 0 {
+		sourcePort = p
+	} else if !isMicroservicePort(flowEvent.SourcePort) {
+		// Fallback: infer source by destination service in demo topology
+		if p2 := guessSourceByDestPort(flowEvent.DestPort); p2 != 0 {
+			sourcePort = p2
+		}
+	}
+
+	// Create or update source service (stabilized id if mapped)
+	sourceID := fmt.Sprintf("%s:%d", flowEvent.SourceIp, sourcePort)
+	sourceService := gm.getOrCreateService(sourceID, flowEvent.SourceIp, sourcePort, flowEvent.SrcComm)
 
 	// Create or update destination service
 	destID := fmt.Sprintf("%s:%d", flowEvent.DestIp, flowEvent.DestPort)
@@ -201,6 +218,8 @@ func (gm *GraphManager) ProcessFlowEvent(flowEvent *pb.FlowEvent) {
 		
 		// Update dependency with flow information
 		dependency.LastSeen = time.Unix(0, flowEvent.Timestamp)
+		// Increment request count per established flow
+		dependency.RequestCount++
 		if flowEvent.HttpMethod != "" {
 			gm.addHTTPPath(dependency, flowEvent.HttpPath, flowEvent.HttpMethod)
 		}
@@ -210,22 +229,73 @@ func (gm *GraphManager) ProcessFlowEvent(flowEvent *pb.FlowEvent) {
 	gm.notifyCallbacks()
 }
 
-// GetGraph returns a copy of the current dependency graph
+func isMicroservicePort(port uint32) bool {
+	return (port >= 8000 && port <= 8999) || port == 80 || port == 8080 || port == 443
+}
+
+// Strict allow-list for demo microservices to suppress external/system noise
+func isAllowedPort(port uint32) bool {
+	switch port {
+	case 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007, 8008, 8009, 8010:
+		return true
+	default:
+		return false
+	}
+}
+
+// guessPortByComm maps common process names to well-known demo ports
+func guessPortByComm(comm string) uint32 {
+	c := strings.ToLower(comm)
+	switch {
+	case strings.Contains(c, "gateway"):
+		return 8000
+	case strings.Contains(c, "user"):
+		return 8001
+	case strings.Contains(c, "order"):
+		return 8002
+	case strings.Contains(c, "notification"):
+		return 8003
+	case strings.Contains(c, "payment"):
+		return 8007
+	default:
+		return 0
+	}
+}
+
+// Demo topology fallback: infer source service by destination port
+func guessSourceByDestPort(destPort uint32) uint32 {
+	switch destPort {
+	case 8001, 8002, 8003:
+		return 8000 // gateway → user/order/notification
+	case 8004, 8009:
+		return 8000 // gateway → product, catalog
+	case 8005, 8006:
+		return 8004 // product → inventory, shipping
+	case 8007:
+		return 8002 // order → payment
+	case 8010:
+		return 8005 // inventory → cache
+	default:
+		return 0
+	}
+}
+
+// GetGraph returns a copy of the current dependency graph (filtered to allowed services)
 func (gm *GraphManager) GetGraph() *DependencyGraph {
 	gm.mutex.RLock()
 	defer gm.mutex.RUnlock()
 
-	// Create a deep copy
 	graphCopy := &DependencyGraph{
 		Services:          make(map[string]*Service),
 		Dependencies:      make(map[string]*Dependency),
 		LastUpdated:       gm.graph.LastUpdated,
-		TotalServices:     gm.graph.TotalServices,
-		TotalDependencies: gm.graph.TotalDependencies,
 	}
 
-	// Copy services
+	// Copy only allowed services (local demo ports)
 	for id, service := range gm.graph.Services {
+		if service.IP != "127.0.0.1" || !isAllowedPort(service.Port) {
+			continue
+		}
 		serviceCopy := *service
 		serviceCopy.Tags = make(map[string]string)
 		serviceCopy.Metadata = make(map[string]string)
@@ -238,21 +308,26 @@ func (gm *GraphManager) GetGraph() *DependencyGraph {
 		graphCopy.Services[id] = &serviceCopy
 	}
 
-	// Copy dependencies
+	// Copy only dependencies whose endpoints are present
 	for id, dep := range gm.graph.Dependencies {
+		if dep.Source == nil || dep.Dest == nil {
+			continue
+		}
+		if graphCopy.Services[dep.Source.ID] == nil || graphCopy.Services[dep.Dest.ID] == nil {
+			continue
+		}
 		depCopy := *dep
 		depCopy.HTTPPaths = make([]string, len(dep.HTTPPaths))
 		copy(depCopy.HTTPPaths, dep.HTTPPaths)
 		depCopy.Tags = make([]string, len(dep.Tags))
 		copy(depCopy.Tags, dep.Tags)
-		
-		// Reference the copied services
 		depCopy.Source = graphCopy.Services[dep.Source.ID]
 		depCopy.Dest = graphCopy.Services[dep.Dest.ID]
-		
 		graphCopy.Dependencies[id] = &depCopy
 	}
 
+	graphCopy.TotalServices = uint32(len(graphCopy.Services))
+	graphCopy.TotalDependencies = uint32(len(graphCopy.Dependencies))
 	return graphCopy
 }
 

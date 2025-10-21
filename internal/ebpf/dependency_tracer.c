@@ -125,6 +125,8 @@ struct {
 struct cookie_meta {
     __u16 dport;
     __u32 daddr;
+    __u32 pid;
+    char comm[16];
 };
 
 struct {
@@ -444,7 +446,8 @@ int cgroup_connect_tracker(struct bpf_sock_addr *ctx) {
 
     // Save cookie metadata for later established callback
     __u64 cookie = bpf_get_socket_cookie(ctx);
-    struct cookie_meta meta = { .dport = port, .daddr = ctx->user_ip4 };
+    struct cookie_meta meta = { .dport = port, .daddr = ctx->user_ip4, .pid = pid };
+    bpf_get_current_comm(&meta.comm, sizeof(meta.comm));
     if (cookie) {
         bpf_map_update_elem(&cookie_map, &cookie, &meta, BPF_ANY);
     }
@@ -477,24 +480,8 @@ int cgroup_connect_tracker(struct bpf_sock_addr *ctx) {
         .protocol = IPPROTO_TCP,
     };
 
-    struct flow_info info = {
-        .first_seen = now,
-        .last_seen = now,
-        .bytes_sent = 0,
-        .packets_sent = 0,
-        .bytes_recv = 0,
-        .packets_recv = 0,
-        .src_pid = pid,
-    };
-    bpf_get_current_comm(&info.src_comm, sizeof(info.src_comm));
-
-    struct flow_event evt = {
-        .timestamp = now,
-        .key = key,
-        .info = info,
-        .event_type = 0, // new_flow
-    };
-    bpf_perf_event_output(ctx, &flow_events, BPF_F_CURRENT_CPU, &evt, sizeof(evt));
+    // Do not emit incomplete flow event here; we only use connect4 to seed maps
+    // (cookie_map/pid_map/service_map). Sockops will emit established flows.
     
     return 1; // Allow connection
 }
@@ -571,7 +558,23 @@ int sockops_tracker(struct bpf_sock_ops *skops) {
         .packets_recv = 0,
         .flow_state = 1, // established
     };
-    // src_comm not available in sockops; leave empty
+    // Fill src pid/comm from cookie/pid mapping if available
+    __u64 cookie2 = bpf_get_socket_cookie(skops);
+    if (cookie2) {
+        struct cookie_meta *m2 = bpf_map_lookup_elem(&cookie_map, &cookie2);
+        if (m2) {
+            info.src_pid = m2->pid;
+            __builtin_memcpy(&info.src_comm, m2->comm, sizeof(info.src_comm));
+        }
+    }
+    if (info.src_pid == 0) {
+        __u32 curpid = bpf_get_current_pid_tgid() >> 32;
+        struct cookie_meta *pm2 = bpf_map_lookup_elem(&pid_map, &curpid);
+        if (pm2) {
+            info.src_pid = pm2->pid;
+            __builtin_memcpy(&info.src_comm, pm2->comm, sizeof(info.src_comm));
+        }
+    }
 
     struct flow_event evt = {
         .timestamp = now,
@@ -582,6 +585,36 @@ int sockops_tracker(struct bpf_sock_ops *skops) {
     bpf_perf_event_output(skops, &flow_events, BPF_F_CURRENT_CPU, &evt, sizeof(evt));
 
     return 0;
+}
+
+// Record listening ports to map server processes → ports
+SEC("cgroup/bind4")
+int cgroup_bind_tracker(struct bpf_sock_addr *ctx) {
+    __u32 pid = bpf_get_current_pid_tgid() >> 32;
+    __u16 port = ctx->user_port;
+    if (!is_microservice_port(port))
+        return 1;
+    __u64 now = bpf_ktime_get_ns();
+    struct service_key svc_key = { .ip = ctx->user_ip4, .port = port };
+    struct service_info *svc = bpf_map_lookup_elem(&service_map, &svc_key);
+    if (!svc) {
+        struct service_info new_svc = {
+            .first_seen = now,
+            .last_seen = now,
+            .total_requests = 0,
+            .total_responses = 0,
+            .pid = pid
+        };
+        identify_service_type(&new_svc, port);
+        bpf_get_current_comm(&new_svc.process_name, sizeof(new_svc.process_name));
+        bpf_map_update_elem(&service_map, &svc_key, &new_svc, BPF_ANY);
+    } else {
+        svc->last_seen = now;
+        svc->pid = pid;
+        bpf_get_current_comm(&svc->process_name, sizeof(svc->process_name));
+        bpf_map_update_elem(&service_map, &svc_key, svc, BPF_EXIST);
+    }
+    return 1;
 }
 
 char _license[] SEC("license") = "GPL";

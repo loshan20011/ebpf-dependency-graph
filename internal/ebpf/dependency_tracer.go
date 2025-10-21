@@ -296,6 +296,16 @@ func (dt *DependencyTracker) attachCgroupProgram() (link.Link, error) {
 		return nil, fmt.Errorf("failed to attach cgroup connect4: %w", err)
 	}
 
+	// Attach bind4 (CGROUP_SOCK_ADDR bind) to record listeners
+	lBind, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    cgroupPath,
+		Attach:  ebpf.AttachCGroupInet4Bind,
+		Program: dt.objs.CgroupBindTracker,
+	})
+	if err != nil {
+		log.Printf("Warning: failed to attach cgroup bind4: %v", err)
+	}
+
 	// Attach sockops (CGROUP_SOCK_OPS)
 	l2, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    cgroupPath,
@@ -303,13 +313,22 @@ func (dt *DependencyTracker) attachCgroupProgram() (link.Link, error) {
 		Program: dt.objs.SockopsTracker,
 	})
 	if err != nil {
-		// if sockops fails, keep connect4
+		// if sockops fails, keep others
 		log.Printf("Warning: failed to attach sockops: %v", err)
+		if lBind != nil {
+			dt.links = append(dt.links, l1, lBind)
+		} else {
+			dt.links = append(dt.links, l1)
+		}
 		return l1, nil
 	}
 
-	// Keep both links; store both
-	dt.links = append(dt.links, l1, l2)
+	// Keep links; store all we have
+	if lBind != nil {
+		dt.links = append(dt.links, l1, lBind, l2)
+	} else {
+		dt.links = append(dt.links, l1, l2)
+	}
 	return l1, nil
 }
 
@@ -359,6 +378,11 @@ func (dt *DependencyTracker) processFlowEvents(ctx context.Context, client *grpc
 
 		// Parse the event
 		event := (*FlowEventC)(unsafe.Pointer(&record.RawSample[0]))
+
+		// Only process established/updates; skip connect-only placeholders
+		if event.EventType == 0 {
+			continue
+		}
 
 		// Convert to protobuf and send
 		flowEvent := dt.convertFlowEvent(event)
