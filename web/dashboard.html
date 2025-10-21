@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eBPF Dependency Tracker Dashboard</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+            html, body {
+                height: 100%;
+            }
+            body {
+                font-family: 'Arial', sans-serif;
+                margin: 0;
+                padding: 20px;
+                background-color: #f5f5f5;
+                color: #333;
+            }
+
+            .header {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                margin-bottom: 20px;
+                text-align: center;
+            }
+
+            .header h1 {
+                margin: 0;
+                font-size: 2.5em;
+                font-weight: 300;
+            }
+
+            .header p {
+                margin: 10px 0 0 0;
+                opacity: 0.9;
+            }
+
+            .dashboard {
+                display: grid;
+                grid-template-columns: 1fr 2fr;
+                gap: 20px;
+                margin-bottom: 20px;
+            }
+
+            .stats-panel {
+                background: white;
+                padding: 20px;
+                border-radius: 10px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+
+            .graph-panel {
+                background: white;
+                padding: 20px;
+                border-radius: 10px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                height: 80vh;               /* fill most of viewport */
+                overflow: auto;             /* make inner content scrollable */
+                display: flex;
+                flex-direction: column;
+            }
+
+            .stat-item {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 15px 0;
+                border-bottom: 1px solid #eee;
+            }
+
+            .stat-item:last-child {
+                border-bottom: none;
+            }
+
+            .stat-label {
+                font-weight: 600;
+                color: #555;
+            }
+
+            .stat-value {
+                font-size: 1.5em;
+                font-weight: bold;
+                color: #667eea;
+            }
+
+            .services-list {
+                margin-top: 20px;
+            }
+
+            .service-item {
+                display: flex;
+                align-items: center;
+                padding: 10px;
+                margin: 5px 0;
+                background: #f8f9fa;
+                border-radius: 5px;
+                border-left: 4px solid #667eea;
+            }
+
+            .service-status {
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+                margin-right: 10px;
+            }
+
+            .service-status.healthy {
+                background-color: #28a745;
+            }
+
+            .service-status.unknown {
+                background-color: #ffc107;
+            }
+
+            .controls {
+                background: white;
+                padding: 15px;
+                border-radius: 10px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                margin-bottom: 20px;
+                text-align: center;
+            }
+
+            .btn {
+                background: #667eea;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                cursor: pointer;
+                margin: 0 10px;
+                font-size: 14px;
+            }
+
+            .btn:hover {
+                background: #5a6fd8;
+            }
+
+            .btn.secondary {
+                background: #6c757d;
+            }
+
+            .btn.secondary:hover {
+                background: #5a6268;
+            }
+
+            /* D3.js Graph Styles */
+            .node {
+                cursor: pointer;
+            }
+
+            .node circle {
+                stroke: #fff;
+                stroke-width: 2px;
+            }
+
+            .node text {
+                font-size: 12px;
+                font-weight: bold;
+                text-anchor: middle;
+                dominant-baseline: central;
+                pointer-events: none;
+            }
+
+            .link {
+                stroke: #999;
+                stroke-opacity: 0.6;
+                stroke-width: 2px;
+            }
+
+            .link.critical {
+                stroke: #dc3545;
+                stroke-width: 3px;
+            }
+
+            .link.strong {
+                stroke: #28a745;
+                stroke-width: 3px;
+            }
+
+            .link.moderate {
+                stroke: #ffc107;
+                stroke-width: 2px;
+            }
+
+            .tooltip {
+                position: absolute;
+                text-align: center;
+                width: auto;
+                height: auto;
+                padding: 10px;
+                font: 12px sans-serif;
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                border: 0px;
+                border-radius: 8px;
+                pointer-events: none;
+                opacity: 0;
+            }
+
+            .last-updated {
+                text-align: center;
+                color: #6c757d;
+                font-style: italic;
+                margin-top: 20px;
+            }
+
+            .error-message {
+                background: #f8d7da;
+                color: #721c24;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 20px 0;
+                border: 1px solid #f5c6cb;
+            }
+
+            .loading {
+                text-align: center;
+                color: #6c757d;
+                padding: 40px;
+            }
+
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+
+            .spinner {
+                border: 4px solid #f3f3f3;
+                border-top: 4px solid #667eea;
+                border-radius: 50%;
+                width: 40px;
+                height: 40px;
+                animation: spin 1s linear infinite;
+                margin: 0 auto 20px auto;
+            }
+
+            /* make graph container scrollable and svg block-level so it can pan/zoom */
+            #graph-container {
+                overflow: auto;
+                position: relative;
+                height: 100%;          /* take remaining panel height */
+                min-height: 0;         /* allow flexbox to shrink properly */
+            }
+
+            #graph-container svg {
+                display: block;
+                /* prevents unexpected extra space below svg */
+            }
+        </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🕸️ eBPF Dependency Tracker</h1>
+        <p>Real-time microservices dependency visualization</p>
+    </div>
+
+    <div class="controls">
+        <button class="btn" onclick="refreshData()">🔄 Refresh</button>
+        <button class="btn secondary" onclick="toggleAutoRefresh()">⏱️ Auto Refresh: <span id="auto-status">Off</span></button>
+        <button class="btn secondary" onclick="resetGraph()">🎯 Reset Layout</button>
+        <button class="btn secondary" onclick="exportGraph()">💾 Export Data</button>
+    </div>
+
+    <div class="dashboard">
+        <div class="stats-panel">
+            <h3>📊 System Statistics</h3>
+            
+            <div class="stat-item">
+                <span class="stat-label">Total Services</span>
+                <span class="stat-value" id="total-services">-</span>
+            </div>
+            
+            <div class="stat-item">
+                <span class="stat-label">Dependencies</span>
+                <span class="stat-value" id="total-dependencies">-</span>
+            </div>
+            
+            <div class="stat-item">
+                <span class="stat-label">Average Latency</span>
+                <span class="stat-value" id="avg-latency">- ms</span>
+            </div>
+            
+            <div class="stat-item">
+                <span class="stat-label">Total Requests</span>
+                <span class="stat-value" id="total-requests">-</span>
+            </div>
+            
+            <div class="stat-item">
+                <span class="stat-label">Error Rate</span>
+                <span class="stat-value" id="error-rate">-%</span>
+            </div>
+
+            <div class="services-list">
+                <h4>🚀 Discovered Services</h4>
+                <div id="services-container"></div>
+            </div>
+        </div>
+
+        <div class="graph-panel">
+            <h3>🔗 Dependency Graph</h3>
+            <div id="graph-container"></div>
+        </div>
+    </div>
+
+    <div class="last-updated" id="last-updated"></div>
+
+    <div class="tooltip" id="tooltip"></div>
+
+    <script>
+        let graphData = null;
+        let autoRefreshInterval = null;
+        let simulation = null;
+        let zoom = null; // added so resetGraph can access zoom
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshData();
+        });
+
+        // Refresh data from API
+        async function refreshData() {
+            try {
+                showLoading();
+                const response = await fetch('/api/dependency-graph');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                graphData = await response.json();
+                updateStats(graphData);
+                updateServicesList(graphData);
+                updateGraph(graphData);
+                updateTimestamp(graphData);
+                hideError();
+                
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                showError(`Failed to fetch data: ${error.message}`);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // Update statistics panel
+        function updateStats(data) {
+            document.getElementById('total-services').textContent = data.total_nodes || 0;
+            document.getElementById('total-dependencies').textContent = data.total_edges || 0;
+            
+            const healthMetrics = data.dependency_stats?.health_metrics || {};
+            document.getElementById('avg-latency').textContent = 
+                (healthMetrics.average_latency || 0).toFixed(1) + ' ms';
+            document.getElementById('total-requests').textContent = 
+                healthMetrics.total_requests || 0;
+            document.getElementById('error-rate').textContent = 
+                ((healthMetrics.overall_error_rate || 0) * 100).toFixed(1) + '%';
+        }
+
+        // Update services list
+        function updateServicesList(data) {
+            const container = document.getElementById('services-container');
+            container.innerHTML = '';
+            
+            // Get unique services from nodes
+            const services = new Set();
+            (data.nodes || []).forEach(node => {
+                if (node.label && !node.label.includes('service-port-')) {
+                    services.add(node.label);
+                }
+            });
+            
+            if (services.size === 0) {
+                container.innerHTML = '<div class="service-item">No services discovered yet</div>';
+                return;
+            }
+            
+            services.forEach(serviceName => {
+                const serviceDiv = document.createElement('div');
+                serviceDiv.className = 'service-item';
+                serviceDiv.innerHTML = `
+                    <div class="service-status healthy"></div>
+                    <strong>${serviceName}</strong>
+                `;
+                container.appendChild(serviceDiv);
+            });
+        }
+
+        // Update dependency graph visualization
+        function updateGraph(data) {
+            const container = document.getElementById('graph-container');
+            container.innerHTML = '';
+            
+            if (!data.nodes || data.nodes.length === 0) {
+                container.innerHTML = '<div class="loading">No dependency data available yet.<br><br>Generate some traffic between services to see dependencies appear.</div>';
+                return;
+            }
+            
+            // Stop previous simulation to avoid multiple conflicting sims
+            if (simulation) {
+                simulation.stop();
+                simulation = null;
+            }
+
+            // compute width/height safely (fallbacks if layout not yet measured)
+            const rect = container.getBoundingClientRect();
+            const width = (rect.width && rect.width > 0) ? rect.width - 40 : Math.max(600, container.clientWidth || 800);
+            const height = Math.max(600, (container.clientHeight || 600) - 40);
+            
+            const svg = d3.select('#graph-container')
+                .append('svg')
+                .attr('width', Math.max(width, 800))
+                .attr('height', height)
+                .attr('viewBox', `0 0 ${Math.max(width, 800)} ${height}`)
+                .attr('preserveAspectRatio', 'xMidYMid meet');
+            
+            // create a zoomable inner group so pan/zoom works and allows scrolling
+            const inner = svg.append('g').attr('class', 'viz-layer');
+
+            // create tooltip
+            const tooltip = d3.select('#tooltip');
+            
+            // Process data
+            const nodes = (data.nodes || []).map(d => ({
+                ...d,
+                id: String(d.id),
+                name: d.label || `${d.ip || 'unknown'}:${d.port || ''}`,
+                group: getNodeGroup(d)
+            }));
+            
+            const links = (data.edges || []).map(d => ({
+                source: String(d.source),
+                target: String(d.target),
+                strength: d.relationship_strength || 1,
+                requests: d.request_count || 0
+            }));
+
+            // Aggregate requests per node so node sizes are meaningful
+            const reqMap = {};
+            links.forEach(l => {
+                reqMap[l.source] = (reqMap[l.source] || 0) + (l.requests || 0);
+                reqMap[l.target] = (reqMap[l.target] || 0) + (l.requests || 0);
+            });
+            nodes.forEach(n => { n.requests = reqMap[n.id] || 0; });
+
+            // give nodes an initial position near the center so they don't collapse to a corner
+            nodes.forEach(n => {
+                n.x = n.x || (Math.max(width, 800) / 2) + (Math.random() - 0.5) * 200;
+                n.y = n.y || (height / 2) + (Math.random() - 0.5) * 200;
+            });
+
+            // Create simulation
+            simulation = d3.forceSimulation(nodes);
+            const linkForce = d3.forceLink(links).id(d => d.id).distance(100);
+            simulation
+                .force('link', linkForce)
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(Math.max(width, 800) / 2, height / 2));
+            // ensure the link force has the links array
+            simulation.force('link').links(links);
+            
+            // Create links inside inner group
+            const link = inner.append('g')
+                .attr('class', 'links')
+                .selectAll('line')
+                .data(links)
+                .enter().append('line')
+                .attr('class', d => `link ${getLinkClass(d.strength)}`)
+                .attr('stroke-width', d => Math.max(1, d.strength / 2))
+                .attr('stroke-linecap', 'round');
+            
+            // Create nodes inside inner group
+            const node = inner.append('g')
+                .attr('class', 'nodes')
+                .selectAll('g')
+                .data(nodes)
+                .enter().append('g')
+                .attr('class', 'node')
+                .call(d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended));
+            
+            node.append('circle')
+                .attr('r', d => Math.max(12, Math.min(36, d.requests / 10 + 12)))
+                .attr('fill', d => getNodeColor(d.group));
+            
+            node.append('text')
+                .text(d => d.name)
+                .attr('dy', 4)
+                .style('font-size', '10px');
+            
+            // Add tooltips
+            node.on('mouseover', function(event, d) {
+                tooltip.style('opacity', 1)
+                    .html(`
+                        <strong>${d.name}</strong><br>
+                        IP: ${d.ip || 'n/a'}<br>
+                        Port: ${d.port || 'n/a'}<br>
+                        Requests: ${d.requests || 0}<br>
+                        Type: ${d.tags?.role || 'unknown'}
+                    `)
+                    .style('left', (event.pageX + 10) + 'px')
+                    .style('top', (event.pageY - 10) + 'px');
+            })
+            .on('mouseout', function() {
+                tooltip.style('opacity', 0);
+            });
+            
+            link.on('mouseover', function(event, d) {
+                tooltip.style('opacity', 1)
+                    .html(`
+                        <strong>Dependency</strong><br>
+                        Requests: ${d.requests}<br>
+                        Strength: ${d.strength}/10
+                    `)
+                    .style('left', (event.pageX + 10) + 'px')
+                    .style('top', (event.pageY - 10) + 'px');
+            })
+            .on('mouseout', function() {
+                tooltip.style('opacity', 0);
+            });
+            
+            // Enable pan & zoom on the svg, transforming the inner group
+            zoom = d3.zoom()
+                .scaleExtent([0.2, 4])
+                .on('zoom', (event) => {
+                    inner.attr('transform', event.transform);
+                });
+
+            svg.call(zoom)
+               // start with no transform (center determined by simulation initial positions)
+               .on('dblclick.zoom', null); // disable dblclick zoom if unwanted
+            
+            // Update positions on tick
+            simulation.on('tick', () => {
+                link
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y);
+                
+                node.attr('transform', d => `translate(${d.x},${d.y})`);
+            });
+        }
+
+        // Helper functions
+        function getNodeGroup(node) {
+            const label = (node.label || '').toLowerCase();
+            if (label.includes('gateway')) return 'gateway';
+            if (label.includes('user')) return 'user';
+            if (label.includes('order')) return 'order';
+            if (label.includes('payment')) return 'payment';
+            if (label.includes('notification')) return 'notification';
+            return 'other';
+        }
+
+        function getNodeColor(group) {
+            const colors = {
+                'gateway': '#FF6B6B',
+                'user': '#4ECDC4', 
+                'order': '#45B7D1',
+                'payment': '#96CEB4',
+                'notification': '#FFEAA7',
+                'other': '#DDA0DD'
+            };
+            return colors[group] || colors.other;
+        }
+
+        function getLinkClass(strength) {
+            if (strength >= 8) return 'critical';
+            if (strength >= 5) return 'strong';
+            return 'moderate';
+        }
+
+        // Drag functions
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+
+        // Control functions
+        function toggleAutoRefresh() {
+            const statusSpan = document.getElementById('auto-status');
+            
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                statusSpan.textContent = 'Off';
+            } else {
+                autoRefreshInterval = setInterval(refreshData, 5000);
+                statusSpan.textContent = 'On (5s)';
+            }
+        }
+
+        function resetGraph() {
+            if (simulation) {
+                simulation.alpha(1).restart();
+            }
+            // reset pan/zoom to identity if zoom exists
+            if (zoom && d3.select('#graph-container svg').node()) {
+                d3.select('#graph-container svg')
+                  .transition()
+                  .duration(400)
+                  .call(zoom.transform, d3.zoomIdentity);
+            }
+        }
+
+        function exportGraph() {
+            if (graphData) {
+                const dataStr = JSON.stringify(graphData, null, 2);
+                const dataBlob = new Blob([dataStr], {type: 'application/json'});
+                const url = URL.createObjectURL(dataBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `dependency-graph-${new Date().toISOString()}.json`;
+                link.click();
+            }
+        }
+
+        function updateTimestamp(data) {
+            const timestamp = new Date(data.timestamp * 1000);
+            document.getElementById('last-updated').textContent = 
+                `Last updated: ${timestamp.toLocaleString()}`;
+        }
+
+        function showLoading() {
+            const container = document.getElementById('graph-container');
+            if (container.children.length === 0) {
+                container.innerHTML = '<div class="loading"><div class="spinner"></div>Loading dependency data...</div>';
+            }
+        }
+
+        function hideLoading() {
+            // Loading will be hidden when graph is updated
+        }
+
+        function showError(message) {
+            const dashboard = document.querySelector('.dashboard');
+            let errorDiv = document.querySelector('.error-message');
+            
+            if (!errorDiv) {
+                errorDiv = document.createElement('div');
+                errorDiv.className = 'error-message';
+                dashboard.parentNode.insertBefore(errorDiv, dashboard);
+            }
+            
+            errorDiv.innerHTML = `<strong>Error:</strong> ${message}`;
+            errorDiv.style.display = 'block';
+        }
+
+        function hideError() {
+            const errorDiv = document.querySelector('.error-message');
+            if (errorDiv) {
+                errorDiv.style.display = 'none';
+            }
+        }
+        
+        // rebuild graph on window resize to keep layout sane
+        window.addEventListener('resize', () => {
+            if (graphData) {
+                updateGraph(graphData);
+            }
+        });
+    </script>
+</body>
+</html>

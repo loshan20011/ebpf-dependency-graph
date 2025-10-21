@@ -1,0 +1,251 @@
+syntax = "proto3";
+
+package metrics;
+option go_package = "github.com/ebpf-dependency-tracker/pkg/proto";
+
+// LatencyMetric represents a latency measurement for an HTTP request
+message LatencyMetric {
+  // Source IP address of the request
+  string source_ip = 1;
+  // Source port of the request
+  uint32 source_port = 2;
+  // Destination IP address of the request
+  string dest_ip = 3;
+  // Destination port of the request
+  uint32 dest_port = 4;
+  // HTTP path (if available)
+  string http_path = 5;
+  // Latency in milliseconds
+  double latency_ms = 6;
+  // Timestamp when the request was initiated
+  int64 timestamp = 7;
+  // Process ID that made the request
+  uint32 pid = 8;
+  // Process name that made the request
+  string process_name = 9;
+}
+
+// ConnectionEvent represents a network connection establishment
+message ConnectionEvent {
+  // Source IP address
+  string source_ip = 1;
+  // Source port
+  uint32 source_port = 2;
+  // Destination IP address
+  string dest_ip = 3;
+  // Destination port
+  uint32 dest_port = 4;
+  // Process ID that made the connection
+  uint32 pid = 5;
+  // Process name that made the connection
+  string process_name = 6;
+  // Timestamp when the connection was established
+  int64 timestamp = 7;
+  // Protocol (TCP, UDP, etc.)
+  string protocol = 8;
+  // HTTP path (if available)
+  string http_path = 9;
+}
+
+// NodeInfo provides information about the node where the agent is running
+message NodeInfo {
+  // Node name (hostname)
+  string node_name = 1;
+  // Node IP address
+  string node_ip = 2;
+  // Agent version
+  string agent_version = 3;
+  // Kernel version
+  string kernel_version = 4;
+}
+
+// Acknowledgment message
+message Ack {
+  bool success = 1;
+  string message = 2;
+}
+
+// MetricsStream service provides streaming of metrics from eBPF agents to the operator
+service MetricsStream {
+  // StreamLatencyMetrics streams latency measurements (client-side streaming)
+  rpc StreamLatencyMetrics(stream LatencyMetric) returns (stream Ack);
+  
+  // StreamConnectionEvents streams connection establishment events (client-side streaming)
+  rpc StreamConnectionEvents(stream ConnectionEvent) returns (stream Ack);
+  
+  // StreamFlowEvents streams network flow events for dependency tracking
+  rpc StreamFlowEvents(stream FlowEvent) returns (stream Ack);
+  
+  // StreamDependencyEvents streams dependency relationship changes
+  rpc StreamDependencyEvents(stream DependencyEvent) returns (stream Ack);
+  
+  // HealthCheck provides a health check endpoint
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// DependencyGraph service for querying dependency information
+service DependencyGraphService {
+  // GetDependencyGraph returns the current complete dependency graph
+  rpc GetDependencyGraph(DependencyGraphRequest) returns (DependencyGraph);
+  
+  // GetServices returns all discovered services
+  rpc GetServices(ServicesRequest) returns (ServicesResponse);
+  
+  // GetDependencies returns dependencies for a specific service or all dependencies
+  rpc GetDependencies(DependenciesRequest) returns (DependenciesResponse);
+  
+  // StreamDependencyUpdates provides real-time dependency graph updates
+  rpc StreamDependencyUpdates(DependencyUpdatesRequest) returns (stream DependencyGraph);
+}
+
+// HealthCheckRequest for health checking
+message HealthCheckRequest {
+  string service = 1;
+}
+
+// HealthCheckResponse for health checking
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+    SERVICE_UNKNOWN = 3;
+  }
+  ServingStatus status = 1;
+}
+
+// FlowEvent represents network flow information for dependency tracking
+message FlowEvent {
+  // Flow identification
+  string source_ip = 1;
+  string dest_ip = 2;
+  uint32 source_port = 3;
+  uint32 dest_port = 4;
+  string protocol = 5;
+  
+  // Flow statistics
+  uint64 first_seen = 6;
+  uint64 last_seen = 7;
+  uint64 bytes_sent = 8;
+  uint64 packets_sent = 9;
+  uint64 bytes_recv = 10;
+  uint64 packets_recv = 11;
+  
+  // Process information
+  uint32 src_pid = 12;
+  uint32 dst_pid = 13;
+  string src_comm = 14;
+  string dst_comm = 15;
+  
+  // HTTP metadata
+  string http_method = 16;
+  string http_path = 17;
+  
+  // Flow state: 0=new, 1=established, 2=finished
+  uint32 flow_state = 18;
+  
+  // Event type: 0=new_flow, 1=flow_update, 2=flow_close
+  uint32 event_type = 19;
+  
+  int64 timestamp = 20;
+}
+
+// ServiceInfo represents a discovered microservice
+message ServiceInfo {
+  // Service identification
+  string ip = 1;
+  uint32 port = 2;
+  string service_name = 3;
+  string process_name = 4;
+  uint32 pid = 5;
+  
+  // Service metadata
+  uint64 first_seen = 6;
+  uint64 last_seen = 7;
+  uint64 total_requests = 8;
+  uint64 total_responses = 9;
+  
+  // Service type: 0=unknown, 1=http, 2=database, 3=cache
+  uint32 service_type = 10;
+}
+
+// DependencyInfo represents a dependency relationship between services
+message DependencyInfo {
+  // Source and destination services
+  ServiceInfo source = 1;
+  ServiceInfo dest = 2;
+  
+  // Relationship metadata
+  uint64 first_seen = 3;
+  uint64 last_seen = 4;
+  uint64 request_count = 5;
+  uint64 total_latency_ns = 6;
+  uint64 avg_latency_ns = 7;
+  uint64 error_count = 8;
+  
+  // Protocol and strength
+  string protocol = 9;
+  uint32 relationship_strength = 10; // 1-10 based on frequency
+}
+
+// DependencyGraph represents the complete service dependency graph
+message DependencyGraph {
+  repeated ServiceInfo services = 1;
+  repeated DependencyInfo dependencies = 2;
+  int64 last_updated = 3;
+  uint32 total_services = 4;
+  uint32 total_dependencies = 5;
+}
+
+// DependencyEvent represents real-time dependency changes
+message DependencyEvent {
+  DependencyInfo dependency = 1;
+  uint32 event_type = 2; // 0=new_dependency, 1=dependency_update
+  int64 timestamp = 3;
+}
+
+// Request/Response messages for DependencyGraphService
+message DependencyGraphRequest {
+  // Optional filters
+  repeated string service_ips = 1;
+  repeated uint32 service_ports = 2;
+  int64 since_timestamp = 3; // Only return dependencies updated since this timestamp
+}
+
+message ServicesRequest {
+  // Optional filters
+  repeated uint32 service_types = 1; // 0=unknown, 1=http, 2=database, 3=cache
+  int64 since_timestamp = 2;
+}
+
+message ServicesResponse {
+  repeated ServiceInfo services = 1;
+  int64 timestamp = 2;
+}
+
+message DependenciesRequest {
+  // Optional source service filter
+  string source_ip = 1;
+  uint32 source_port = 2;
+  
+  // Optional destination service filter
+  string dest_ip = 3;
+  uint32 dest_port = 4;
+  
+  // Optional filters
+  int64 since_timestamp = 5;
+  uint32 min_relationship_strength = 6;
+}
+
+message DependenciesResponse {
+  repeated DependencyInfo dependencies = 1;
+  int64 timestamp = 2;
+}
+
+message DependencyUpdatesRequest {
+  // Subscription preferences
+  bool include_new_services = 1;
+  bool include_new_dependencies = 2;
+  bool include_updates = 3;
+  int64 update_interval_ms = 4; // Minimum interval between updates
+}
