@@ -185,6 +185,17 @@
                 stroke-width: 2px;
             }
 
+            /* Highlighting for HTTP path filter */
+            .link.highlight {
+                stroke: #0069d9 !important;
+                stroke-width: 4px !important;
+                stroke-opacity: 0.9 !important;
+            }
+            .node.highlight circle {
+                stroke: #0069d9;
+                stroke-width: 3px;
+            }
+
             .tooltip {
                 position: absolute;
                 text-align: center;
@@ -262,6 +273,22 @@
         <button class="btn secondary" onclick="toggleAutoRefresh()">⏱️ Auto Refresh: <span id="auto-status">Off</span></button>
         <button class="btn secondary" onclick="resetGraph()">🎯 Reset Layout</button>
         <button class="btn secondary" onclick="exportGraph()">💾 Export Data</button>
+        <div style="margin-top:12px">
+            <label style="margin-right:8px; font-weight:600">HTTP Path Filter:</label>
+            <select id="method-filter" style="padding:6px 8px; border-radius:4px; margin-right:6px">
+                <option value="">Any</option>
+                <option>GET</option>
+                <option>POST</option>
+                <option>PUT</option>
+                <option>DELETE</option>
+                <option>PATCH</option>
+                <option>HEAD</option>
+            </select>
+            <input id="path-filter" placeholder="e.g. /products" style="padding:6px 8px; width:220px; border-radius:4px; border:1px solid #ccc" />
+            <button class="btn" onclick="applyPathFilter()">🔍 Filter</button>
+            <button class="btn secondary" onclick="clearPathFilter()">❌ Clear</button>
+        </div>
+        <div id="path-summary" style="margin-top:10px; color:#555; font-size:14px"></div>
     </div>
 
     <div class="dashboard">
@@ -314,6 +341,7 @@
         let autoRefreshInterval = null;
         let simulation = null;
         let zoom = null; // added so resetGraph can access zoom
+        let currentPathFilter = { method: '', path: '' };
 
         // Initialize dashboard
         document.addEventListener('DOMContentLoaded', function() {
@@ -391,6 +419,7 @@
         // Update dependency graph visualization
         function updateGraph(data) {
             const container = document.getElementById('graph-container');
+            const pathSummary = document.getElementById('path-summary');
             container.innerHTML = '';
             
             if (!data.nodes || data.nodes.length === 0) {
@@ -434,7 +463,8 @@
                 source: String(d.source),
                 target: String(d.target),
                 strength: d.relationship_strength || 1,
-                requests: d.request_count || 0
+                requests: d.request_count || 0,
+                http_paths: d.http_paths || []
             }));
 
             // Aggregate requests per node so node sizes are meaningful
@@ -467,17 +497,21 @@
                 .selectAll('line')
                 .data(links)
                 .enter().append('line')
-                .attr('class', d => `link ${getLinkClass(d.strength)}`)
+                .attr('class', d => `link ${getLinkClass(d.strength)} ${edgeMatchesFilter(d) ? 'highlight' : ''}`)
                 .attr('stroke-width', d => Math.max(1, d.strength / 2))
                 .attr('stroke-linecap', 'round');
             
             // Create nodes inside inner group
+            // Mark nodes that are part of filtered edges
+            const highlightedNodeIds = new Set();
+            links.forEach(l => { if (edgeMatchesFilter(l)) { highlightedNodeIds.add(l.source); highlightedNodeIds.add(l.target); } });
+
             const node = inner.append('g')
                 .attr('class', 'nodes')
                 .selectAll('g')
                 .data(nodes)
                 .enter().append('g')
-                .attr('class', 'node')
+                .attr('class', d => `node ${highlightedNodeIds.has(d.id) ? 'highlight' : ''}`)
                 .call(d3.drag()
                     .on('start', dragstarted)
                     .on('drag', dragged)
@@ -510,11 +544,12 @@
             });
             
             link.on('mouseover', function(event, d) {
+                const pathsHtml = (d.http_paths && d.http_paths.length) ? `<br>Paths:<br>${d.http_paths.map(p=>`<code>${p}</code>`).join('<br>')}` : '';
                 tooltip.style('opacity', 1)
                     .html(`
                         <strong>Dependency</strong><br>
                         Requests: ${d.requests}<br>
-                        Strength: ${d.strength}/10
+                        Strength: ${d.strength}/10${pathsHtml}
                     `)
                     .style('left', (event.pageX + 10) + 'px')
                     .style('top', (event.pageY - 10) + 'px');
@@ -544,6 +579,24 @@
                 
                 node.attr('transform', d => `translate(${d.x},${d.y})`);
             });
+            // Update path summary list (microservices participating in filtered path)
+            if (currentPathFilter.path || currentPathFilter.method) {
+                const svcSet = new Set();
+                links.filter(edgeMatchesFilter).forEach(l => {
+                    const s = nodes.find(n => n.id === l.source);
+                    const t = nodes.find(n => n.id === l.target);
+                    if (s) svcSet.add(s.name);
+                    if (t) svcSet.add(t.name);
+                });
+                const items = Array.from(svcSet);
+                if (items.length) {
+                    pathSummary.innerHTML = `<strong>Services for ${currentPathFilter.method ? currentPathFilter.method + ' ' : ''}${currentPathFilter.path}:</strong> ${items.join(' → ')}`;
+                } else {
+                    pathSummary.innerHTML = `<strong>No edges match this filter.</strong>`;
+                }
+            } else {
+                pathSummary.innerHTML = '';
+            }
         }
 
         // Helper functions
@@ -573,6 +626,19 @@
             if (strength >= 8) return 'critical';
             if (strength >= 5) return 'strong';
             return 'moderate';
+        }
+
+        function edgeMatchesFilter(edge) {
+            const m = (currentPathFilter.method || '').toUpperCase();
+            const p = (currentPathFilter.path || '').trim();
+            if (!m && !p) return false; // no filter
+            const candidates = edge.http_paths || [];
+            return candidates.some(x => {
+                if (m && p) return x.toUpperCase() === `${m} ${p}`.toUpperCase();
+                if (m) return x.toUpperCase().startsWith(`${m} `);
+                if (p) return x.toUpperCase().includes(` ${p}`.toUpperCase()) || x.toUpperCase().endsWith(` ${p}`.toUpperCase());
+                return false;
+            });
         }
 
         // Drag functions
@@ -636,6 +702,21 @@
             const timestamp = new Date(data.timestamp * 1000);
             document.getElementById('last-updated').textContent = 
                 `Last updated: ${timestamp.toLocaleString()}`;
+        }
+
+        function applyPathFilter() {
+            const method = document.getElementById('method-filter').value || '';
+            const path = document.getElementById('path-filter').value || '';
+            currentPathFilter = { method, path };
+            if (graphData) updateGraph(graphData);
+        }
+
+        function clearPathFilter() {
+            document.getElementById('method-filter').value = '';
+            document.getElementById('path-filter').value = '';
+            currentPathFilter = { method: '', path: '' };
+            document.getElementById('path-summary').innerHTML = '';
+            if (graphData) updateGraph(graphData);
         }
 
         function showLoading() {
