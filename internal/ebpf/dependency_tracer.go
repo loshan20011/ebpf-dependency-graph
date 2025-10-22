@@ -42,7 +42,7 @@ type FlowInfo struct {
 	SrcComm     [16]byte
 	DstComm     [16]byte
 	HTTPMethod  [8]byte
-	HTTPPath    [64]byte
+	HTTPPath    [32]byte
 	FlowState   uint8
 }
 
@@ -103,6 +103,8 @@ type DependencyTracker struct {
 	servicesMutex  sync.RWMutex
 	depMutex       sync.RWMutex
 	lastGraphUpdate time.Time
+
+	pathc         interface{ Lookup(srcIP string, srcPort uint16, dstIP string, dstPort uint16) (string, string, bool) }
 }
 
 // NewDependencyTracker creates a new dependency tracker
@@ -351,6 +353,11 @@ func (dt *DependencyTracker) setupPerfReaders() error {
 	return nil
 }
 
+// WithPathCollector injects a userspace path collector
+func (dt *DependencyTracker) WithPathCollector(pc interface{ Lookup(string, uint16, string, uint16) (string, string, bool) }) {
+	dt.pathc = pc
+}
+
 // processFlowEvents reads and processes flow events
 func (dt *DependencyTracker) processFlowEvents(ctx context.Context, client *grpc.Client) error {
 	log.Println("Starting flow events processing")
@@ -379,13 +386,17 @@ func (dt *DependencyTracker) processFlowEvents(ctx context.Context, client *grpc
 		// Parse the event
 		event := (*FlowEventC)(unsafe.Pointer(&record.RawSample[0]))
 
-		// Only process established/updates; skip connect-only placeholders
-		if event.EventType == 0 {
-			continue
-		}
+		// Process all flow events (including connect) to allow timely HTTP path enrichment
 
-		// Convert to protobuf and send
+		// Convert to protobuf and send (enrich with HTTP path if available)
 		flowEvent := dt.convertFlowEvent(event)
+		if dt.pathc != nil {
+			m, p, ok := dt.pathc.Lookup(flowEvent.SourceIp, uint16(flowEvent.SourcePort), flowEvent.DestIp, uint16(flowEvent.DestPort))
+			if ok {
+				flowEvent.HttpMethod = m
+				flowEvent.HttpPath = p
+			}
+		}
 		if err := client.SendFlowEvent(ctx, flowEvent); err != nil {
 			log.Printf("Error sending flow event: %v", err)
 		}

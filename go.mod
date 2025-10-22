@@ -6,6 +6,7 @@ toolchain go1.24.9
 
 require (
 	github.com/cilium/ebpf v0.19.0
+	github.com/google/gopacket v1.1.19
 	google.golang.org/grpc v1.72.0
 	google.golang.org/protobuf v1.36.10
 )

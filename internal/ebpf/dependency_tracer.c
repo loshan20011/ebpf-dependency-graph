@@ -14,6 +14,13 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_endian.h>
 
+// Minimal sys_enter ctx for tracepoints
+struct trace_event_raw_sys_enter {
+    unsigned long __unused[4];
+    long id;
+    unsigned long args[6];
+};
+
 // Define missing types
 typedef unsigned long size_t;
 
@@ -44,7 +51,7 @@ struct flow_info {
     char src_comm[16];
     char dst_comm[16];
     char http_method[8];
-    char http_path[64];
+    char http_path[32];
     __u8 flow_state; // 0: new, 1: established, 2: finished
 };
 
@@ -81,6 +88,7 @@ struct dependency_info {
     char protocol[8];
     __u8 relationship_strength; // 1-10 based on frequency
 };
+
 
 // Event structures for userspace
 struct flow_event {
@@ -135,6 +143,7 @@ struct {
     __type(key, __u64);
     __type(value, struct cookie_meta);
 } cookie_map SEC(".maps");
+
 
 // PID map as fallback correlation when cookie is unavailable
 struct {
@@ -394,36 +403,9 @@ int tc_dependency_tracker(struct __sk_buff *skb) {
 
 // Enhanced connection tracking with HTTP payload analysis
 SEC("tracepoint/syscalls/sys_enter_sendto")
-int trace_sendto_enhanced(void *ctx) {
-	__u64 pid_tgid = bpf_get_current_pid_tgid();
-	__u32 pid = pid_tgid >> 32;
-	
-	// For demo purposes, just return - would need proper tracepoint context parsing
-	return 0;
-	
-	/*
-	void *buf = (void *)ctx->args[1];
-	size_t len = (size_t)ctx->args[2];
-    
-    if (!buf || len < 10 || len > 1024)
-        return 0;
-    
-    char http_data[256];
-    if (bpf_probe_read_user(http_data, sizeof(http_data), buf) != 0)
-        return 0;
-    
-    // Check for HTTP request
-    if (!(http_data[0] == 'G' && http_data[1] == 'E' && http_data[2] == 'T') &&
-        !(http_data[0] == 'P' && http_data[1] == 'O' && http_data[2] == 'S') &&
-        !(http_data[0] == 'P' && http_data[1] == 'U' && http_data[2] == 'T') &&
-        !(http_data[0] == 'D' && http_data[1] == 'E' && http_data[2] == 'L'))
-        return 0;
-    
-	// Extract socket information would require additional kernel helpers
-	// For now, we focus on the flow tracking in XDP/TC programs
-	
-	return 0;
-	*/
+int trace_sendto_enhanced(void *raw_ctx) {
+    // Disabled HTTP path capture to reduce stack usage
+    return 0;
 }
 
 // Socket address tracking for cgroup programs

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ebpf-dependency-tracker/internal/ebpf"
 	"github.com/ebpf-dependency-tracker/internal/grpc"
+	"github.com/ebpf-dependency-tracker/internal/pathsniff"
 )
 
 const (
@@ -45,6 +46,12 @@ func main() {
 		log.Fatalf("Failed to create eBPF dependency tracker: %v", err)
 	}
 	defer tracer.Close()
+
+	// Userspace HTTP path collector on loopback ports 8000-8010 (no app changes)
+	ports := []int{8000,8001,8002,8003,8004,8005,8006,8007,8008,8009,8010}
+	pc := pathsniff.NewCollector(ports)
+	_ = pc.Start(ctx)
+	tracer.WithPathCollector(pc)
 
 	log.Println("Dependency tracker initialized successfully")
 

@@ -53,7 +53,7 @@ type dependencyTracerFlowInfo struct {
 	SrcComm     [16]int8
 	DstComm     [16]int8
 	HttpMethod  [8]int8
-	HttpPath    [64]int8
+	HttpPath    [32]int8
 	FlowState   uint8
 	_           [7]byte
 }
